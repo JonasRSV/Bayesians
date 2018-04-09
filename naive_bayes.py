@@ -4,146 +4,174 @@ from sys import exit, stdout
 MINUS_INF = -100000000000
 PLUS_INF = 100000000000
 
+class memory(object):
+    """Store trained data."""
 
-class naive_bayesian(object):
+    def __init__(self, ev=None, cov=None, p=None, ssz=None, cl=None):
+        """
+        Store values.
+
+        Expected Values: ev
+        Covariances: cov
+        Prioris: p
+        Sample Size: ssz
+        classes: cl
+        """
+        self.ev = ev
+        self.cov = cov
+        self.p = p
+        self.cl = cl
+
+
+def ml_norm_dist(train, labels, bw=None):
+    """Calculate Maximum likelihood.
+
+    These ML variables are calculated with respect
+    to the log ML of the generalized normal distribution.
     """
-    Naive Bayes classifier.
+    if bw is None:
+        bw = ones(len(labels))
 
-    Labels are expected to be numbers,
-    enumerate from 0...N
-    where N is the number of classes.
+    classes = set(labels)
+    class_sz = len(classes)
+    _, features_sz = train.shape
 
-    Because the class will be used as index
-    <key> for covariance, prior and expected value
-    belonging to that class.
+    ev_shape = (class_sz, features_sz)
+    cov_shape = (features_sz, features_sz)
+    covs_shape = (class_sz, features_sz, features_sz)
+
+    expected_values = zeros(ev_shape)
+    covariances = zeros(covs_shape)
+
+    for class_ in classes:
+        class_ = int(class_)
+
+        class_data = train[class_ == labels]
+        weights = bw[class_ == labels]
+
+        expected_values[class_] = (weights.T @ class_data) / sum(weights)
+        covariance = zeros(cov_shape)
+
+        for feature in range(features_sz):
+            variance = square(class_data[:, feature]
+                              - expected_values[class_][feature])
+
+            covariance[feature][feature] =\
+                (weights @ variance) / sum(weights)
+
+        covariances[class_] = covariance
+
+    return covariances, expected_values
+
+
+def norm_dist_predict(mem, X):
+    """Predict belongance of X.
+
+    using the generalized normal distribution.
     """
+    class_belongance = None
 
-    def __init__(self):
-        """Constructor."""
-        self.priors = None
-        self.covariances = None
-        self.expected_values = None
-        self.labels = None
+    """Really low number."""
+    max_aposteori = -100000000000
 
-        self.classes = None
-        self.num_of_classes = None
+    for class_ in mem.cl:
+        class_ = int(class_)
 
-        self.features = None
-        self.samples = None
+        cov = mem.cov[class_]
+        ev = mem.ev[class_]
+        priori = mem.p[class_]
 
-    def __calculate_priori(self, labels):
+        quadratic_form = (X - ev).T @ inv(cov) @ (X - ev)
+
+        """0 Variance features will give log 0, which is error."""
+        log_likelyhood = -0.5 * (log(det(cov) + 1e-10) + quadratic_form)
+        log_priori = log(priori)
+
+        belongance = log_likelyhood + log_priori
+
+        if belongance > max_aposteori:
+            max_aposteori = belongance
+            class_belongance = class_
+
+    return class_belongance
+
+
+def det(matrix):
+    """Get determinant of a diagonalized matrix (Or assumed to be)."""
+    det = 1
+    for i in diag(matrix):
+        det *= i
+
+    return det
+
+
+def inv(matrix):
+    """Invert a diagonalized matrix."""
+    inverted = zeros(matrix.shape)
+    for i, var in enumerate(diag(matrix)):
+        """
+        If variance is 0 there's something wierd
+        with the training data, might not even
+        need a classifier for this. But ill
+        add a check here so that the program
+        does not crash."""
+
+        if var == 0:
+            inverted[i][i] = 10000000
+        else:
+            inverted[i][i] = 1 / var
+
+    return inverted
+
+
+class classifier(object):
+    """Classifier class."""
+
+    def __init__(self, m=None, ml=ml_norm_dist, p=norm_dist_predict):
+        """Constructor.
+
+        Memory: m
+        Maximum Likelyhood: ml
+        predictor: p
+        """
+        self.m = m
+        self.ml = ml
+        self.p = p
+
+    def __calculate_priori(self, labels, bw=None):
         """Calculate the priori for each class."""
-        priors = zeros(self.num_of_classes)
-        for _class in self.classes:
-            _class = int(_class)
+        classes = set(labels)
+        class_sz = len(classes)
+        samples = len(labels)
 
-            priors[_class] = len(labels[_class == labels]) / len(labels)
+        if bw is None:
+            bw = ones(samples)
+
+        priors = zeros(class_sz)
+
+        """Label ones."""
+        lo = ones(samples)
+
+        for class_ in classes:
+            class_ = int(class_)
+
+            occurrences = lo[class_ == labels]
+            weights = bw[class_ == labels]
+
+            priors[class_] = (weights @ occurrences) / sum(bw)
 
         return priors
 
-    def __calculate_maximum_likelyhood(self, data, labels):
-        """Calculate covariance and expected value for each class."""
-        expected_values = zeros((self.num_of_classes,
-                                 self.features)
-                                )
-
-        covariances = zeros((self.num_of_classes,
-                             self.features,
-                             self.features)
-                            )
-
-        naive_enforcer = diag(ones(self.features))
-
-        for _class in self.classes:
-            _class = int(_class)
-
-            class_data = data[_class == labels]
-            expected_values[_class] = mean(class_data, axis=0)
-
-            mean_diff = class_data - expected_values[_class]
-
-            """
-            By multiplying with the identity matrix were only
-            keeping feature variance and no covariance, making
-            it a naive bayes.
-            """
-            covariances[_class] = (mean_diff.T @ mean_diff) * naive_enforcer
-
-        return covariances, expected_values
-
-    def __normal_dist_max_aposteori(self, X):
-        """Classify X using the generalized normal distribution."""
-        class_belongance = -1
-        max_aposteori = MINUS_INF
-        for class_ in self.classes:
-            class_ = int(class_)
-
-            covariance = self.covariances[class_]
-            expected_value = self.expected_values[class_]
-            priori = self.priors[class_]
-
-            """
-            Because it's a naive bayes we can write speical functions
-            for determinant and inverse of matrix.. making it much faster.
-            Because the matrix is diagonal.
-            """
-            quadratic_form = (X - expected_value).T @ iodm(covariance) @ (X - expected_value)
-            log_likelyhood = -0.5 * (log(dodm(covariance) + 1e-10) + quadratic_form)
-            log_priori = log(priori)
-
-            belongance = log_likelyhood + log_priori
-
-            if belongance > max_aposteori:
-                max_aposteori = belongance
-                class_belongance = class_
-
-        return class_belongance
-
-    def train(self, data, labels):
+    def train(self, data, labels, bw=None):
         """Train the classifier."""
-        self.samples, self.features = data.shape
-        self.classes = set(labels)
-        self.num_of_classes = len(self.classes)
-        self.priors = self.__calculate_priori(labels)
-        self.covariances, self.expected_values =\
-            self.__calculate_maximum_likelyhood(data, labels)
+        self.m = memory()
+        self.m.cl = set(labels)
+        self.m.p = self.__calculate_priori(labels, bw)
+        self.m.cov, self.m.ev = self.ml(data, labels, bw)
 
         return self
 
     def predict(self, X):
         """Predict new data."""
-        return self.__normal_dist_max_aposteori(X)
-
-
-def dodm(matrix):
-    """Get determinant of a diagonalized matrix (Or assumed to be)."""
-    (x, y) = matrix.shape
-
-    if x != y:
-        print("Determinant of a non-square matrix is always 0")
-        return 0
-
-    det = 1
-    for i in range(x):
-        det *= matrix[i][i]
-
-    return det
-
-
-def iodm(matrix):
-    """Get inverse of a diagnoalized matrix (Or assumed to be)."""
-    (x, y) = matrix.shape
-
-    if x != y:
-        print("Non Square matrix not invertible.")
-        exit(1)
-
-    inverted = zeros(matrix.shape)
-    for i in range(x):
-        if matrix[i][i] == 0:
-            inverted[i][i] = PLUS_INF
-        else:
-            inverted[i][i] = 1 / matrix[i][i]
-
-    return inverted
+        return self.p(self.m, X)
 
