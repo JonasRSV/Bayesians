@@ -4,6 +4,7 @@ from sys import exit, stdout
 MINUS_INF = -100000000000
 PLUS_INF = 100000000000
 
+
 class memory(object):
     """Store trained data."""
 
@@ -33,15 +34,12 @@ def ml_norm_dist(train, labels, bw=None):
         bw = ones(len(labels))
 
     classes = set(labels)
-    class_sz = len(classes)
     _, features_sz = train.shape
 
-    ev_shape = (class_sz, features_sz)
     cov_shape = (features_sz, features_sz)
-    covs_shape = (class_sz, features_sz, features_sz)
 
-    expected_values = zeros(ev_shape)
-    covariances = zeros(covs_shape)
+    expected_values = {}
+    covariances = {}
 
     for class_ in classes:
         class_ = int(class_)
@@ -147,7 +145,7 @@ class classifier(object):
         if bw is None:
             bw = ones(samples)
 
-        priors = zeros(class_sz)
+        priors = {}
 
         """Label ones."""
         lo = ones(samples)
